@@ -34,7 +34,8 @@ import datetime
 import numpy as np
 import skimage.draw
 import cv2
-from mrcnn.visualize import display_instances
+from mrcnn.visualize import plot_overlaps, plot_precision_recall
+from mrcnn.utils import compute_ap, compute_matches, compute_ap_range,compute_recall
 import matplotlib.pyplot as plt
 
 # Root directory of the project
@@ -52,9 +53,9 @@ COCO_WEIGHTS_PATH = os.path.join(ROOT_DIR, "mask_rcnn_coco.h5")
 # through the command line argument --logs
 DEFAULT_LOGS_DIR = os.path.join(ROOT_DIR, "logs")
 
-############################################################
+########################################################################################################################
 #  Configurations
-############################################################
+########################################################################################################################
 
 
 class CustomConfig(Config):
@@ -78,9 +79,9 @@ class CustomConfig(Config):
     DETECTION_MIN_CONFIDENCE = 0.9
 
 
-############################################################
+########################################################################################################################
 #  Dataset
-############################################################
+########################################################################################################################
 
 class CustomDataset(utils.Dataset):
 
@@ -93,7 +94,7 @@ class CustomDataset(utils.Dataset):
         self.add_class("yaya", 1, "yaya")
 
         # Train or validation dataset?
-        assert subset in ["train", "val"]
+        assert subset in ["train", "val","test"]
         dataset_dir = os.path.join(dataset_dir, subset)
 
         # Load annotations
@@ -188,6 +189,8 @@ def train(model):
     dataset_val.load_custom(args.dataset, "val")
     dataset_val.prepare()
 
+
+
     # *** This training schedule is an example. Update to your needs ***
     # Since we're using a very small dataset, and starting from
     # COCO trained weights, we don't need to train too long. Also,
@@ -221,7 +224,7 @@ def color_splash(image, mask):
 
 def detect_and_color_splash(model, image_path=None, video_path=None):
     assert image_path or video_path
-
+    
     # Image or video?
     if image_path:
         # Run model detection and generate the color splash effect
@@ -230,8 +233,10 @@ def detect_and_color_splash(model, image_path=None, video_path=None):
         image = skimage.io.imread(args.image)
         # Detect objects
         r = model.detect([image], verbose=1)[0]
+        print(r['masks'])
         # Color splash
         splash = color_splash(image, r['masks'])
+
         # Save output
         file_name = "splash_{:%Y%m%dT%H%M%S}.png".format(datetime.datetime.now())
         skimage.io.imsave(file_name, splash)
@@ -270,9 +275,49 @@ def detect_and_color_splash(model, image_path=None, video_path=None):
         vwriter.release()
     print("Saved to ", file_name)
 
-############################################################
+########################################################################################################################
+#  TEST
+########################################################################################################################
+
+
+
+def test():
+    dataset_test = CustomDataset()
+    dataset_test.load_custom(args.dataset, "test")
+    dataset_test.prepare()
+
+    image_ids = np.random.choice(dataset_test.image_ids, 10)
+    APs = []
+    precisions = []
+    recalls = []
+    for image_id in image_ids:
+        listsof_loads = modellib.load_image_gt(dataset_test,config,image_id,use_mini_mask=False)
+        image = listsof_loads[0]
+        image_meta = listsof_loads[1]
+        gt_class_ids = listsof_loads[2]
+        gt_bbox = listsof_loads[3]
+        gt_mask = listsof_loads[4]
+
+        molded_images = np.expand_dims(modellib.mold_image(image, config), 0)
+        # Run object detection
+        results = model.detect([image], verbose=0)
+        r = results[0]
+
+        # Compute AP
+        AP, precisions, recalls, overlaps =\
+            utils.compute_ap(gt_bbox[:,:4], gt_class_ids, gt_mask,
+                            r["rois"], r["class_ids"], r["scores"],r["masks"])
+        
+        APs.append(AP)
+    plot_overlaps(gt_class_ids, r["class_ids"], r["scores"],
+                  overlaps, "yaya")
+    plot_precision_recall(np.mean(APs), precisions, recalls)
+    plt.show()
+    print("mAP: ", np.mean(APs))
+
+########################################################################################################################
 #  Training
-############################################################
+########################################################################################################################
 
 if __name__ == '__main__':
     import argparse
@@ -364,6 +409,9 @@ if __name__ == '__main__':
     elif args.command == "splash":
         detect_and_color_splash(model, image_path=args.image,
                                 video_path=args.video)
+    elif args.command == "test":
+        test()
+    
     else:
         print("'{}' is not recognized. "
               "Use 'train' or 'splash'".format(args.command))
